@@ -7,7 +7,9 @@ authors = [
     { name = "louis camara", email = "290180433+tilouc@users.noreply.github.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pyyaml>=6.0.4",
+]
 
 [project.scripts]
 velo = "velo.cli:main"
