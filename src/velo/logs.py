@@ -1,4 +1,14 @@
-"""Configuration du module logging : messages de suivi vers la console et vers un fichier."""
+"""Le journal de bord (le module logging).
+
+print() affiche un message et c'est tout. logging, c'est mieux :
+- chaque message a un niveau : DEBUG (détail), INFO (normal), WARNING
+  (attention), ERROR (raté) ;
+- un même message peut partir à deux endroits : l'écran ET un fichier velo.log ;
+- on choisit ce qu'on voit à l'écran avec logging.level dans config.yaml.
+
+Ici : l'écran montre les messages à partir du niveau choisi (INFO par défaut),
+et le fichier velo.log garde TOUT, avec la date, pour comprendre après coup.
+"""
 
 from __future__ import annotations
 
@@ -13,16 +23,20 @@ LOG_FILE_NAME = "velo.log"
 
 
 class _NotAlreadyShown(logging.Filter):
-    """Évite d'afficher deux fois une erreur déjà montrée à l'utilisateur par la CLI."""
+    """Empêche d'afficher deux fois la même erreur à l'écran.
+
+    Quand cli.py affiche déjà « Erreur : ... », il marque le message shown=True
+    pour qu'il aille seulement dans le fichier, pas une deuxième fois à l'écran.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
         return not getattr(record, "shown", False)
 
 
 def setup_console(level: str = "INFO") -> None:
-    """Active les messages de suivi dans le terminal (sur la sortie d'erreur)."""
+    """Branche la sortie « écran » du journal."""
     root = logging.getLogger("velo")
-    root.setLevel(logging.DEBUG)  # chaque handler filtre ensuite selon son propre niveau
+    root.setLevel(logging.DEBUG)  # on laisse tout passer, chaque sortie filtre à son niveau
     for handler in list(root.handlers):
         root.removeHandler(handler)
     console = RichHandler(console=error_console, show_time=False, show_path=False)
@@ -32,14 +46,14 @@ def setup_console(level: str = "INFO") -> None:
 
 
 def set_console_level(level: str) -> None:
-    """Change le niveau des messages affichés dans le terminal."""
+    """Change le niveau affiché à l'écran (celui lu dans config.yaml)."""
     for handler in logging.getLogger("velo").handlers:
         if isinstance(handler, RichHandler):
             handler.setLevel(level)
 
 
 def add_file(folder: Path) -> Path | None:
-    """Ajoute le fichier de log <folder>/velo.log (tous les niveaux, avec la date)."""
+    """Branche la sortie « fichier » du journal : <folder>/velo.log, tous niveaux, avec la date."""
     path = folder / LOG_FILE_NAME
     try:
         folder.mkdir(parents=True, exist_ok=True)
@@ -54,7 +68,7 @@ def add_file(folder: Path) -> Path | None:
 
 
 def close_files() -> None:
-    """Ferme les fichiers de log (utile dans les tests)."""
+    """Ferme proprement le fichier de log à la fin de la commande."""
     root = logging.getLogger("velo")
     for handler in list(root.handlers):
         if isinstance(handler, logging.FileHandler):

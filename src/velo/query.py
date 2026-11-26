@@ -1,8 +1,19 @@
-"""Analyse de l'historique (velo query) : sélection, métriques, regroupement.
+"""Analyser l'historique (velo query).
 
-Les relevés des stations hors service sont exclus des calculs (une station
-fermée n'est ni « vide » ni « pleine » au sens de l'usager). Les interruptions
-de collecte ne sont jamais comblées : on calcule seulement sur ce qui existe.
+Une requête se fait en trois temps, comme une enquête :
+1. TRIER : garder seulement les relevés qui nous intéressent
+   (un jour, des heures, une station...) ;
+2. GROUPER : les ranger en paquets (par station, par heure, par jour...) ;
+3. CALCULER : une moyenne ou un pourcentage pour chaque paquet.
+
+Exemple : « quelles stations sont le plus souvent vides en semaine entre 7h et 9h ? »
+-> trier : en semaine, de 7h à 9h ; grouper : par station ; calculer : % de fois où vide.
+
+Deux règles :
+- les relevés des stations hors service sont mis de côté (une station fermée
+  n'est ni « vide » ni « pleine » pour un usager) ;
+- les trous dans la collecte ne sont jamais remplis : on calcule seulement
+  sur ce qui a vraiment été enregistré.
 """
 
 from __future__ import annotations
@@ -18,6 +29,7 @@ from velo.storage import Record
 METRICS = ("avg_bikes", "avg_docks", "empty_rate", "full_rate")
 GROUPS = ("station", "hour", "weekday", "day")
 WEEKDAY_NAMES = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+# Les façons d'écrire un jour : "lundi", "mon" ou "monday" -> 0 (Python compte lundi = 0).
 _DAY_ALIASES = {
     **{name: i for i, name in enumerate(WEEKDAY_NAMES)},
     **{name: i for i, name in enumerate(("mon", "tue", "wed", "thu", "fri", "sat", "sun"))},
@@ -27,14 +39,14 @@ _DAY_ALIASES = {
 
 
 class NoDataError(VeloError):
-    """Aucun relevé ne correspond à la sélection demandée."""
+    """Aucun relevé ne correspond à ce qui est demandé."""
 
 
-# --- Lecture des options de sélection ----------------------------------------
+# --- Lire les options tapées par l'utilisateur ---------------------------------------------
 
 
 def parse_day(text: str) -> date:
-    """"2026-11-18" -> date. Lève VeloError si le format est faux."""
+    """"2026-11-18" -> une date. Mauvais format -> message clair."""
     try:
         return date.fromisoformat(text)
     except ValueError as exc:
@@ -42,14 +54,16 @@ def parse_day(text: str) -> date:
 
 
 def parse_moment(text: str, end_of_day: bool = False) -> datetime:
-    """"2026-11-18" ou "2026-11-18 08:30" -> datetime local avec décalage horaire.
+    """"2026-11-18" ou "2026-11-18 08:30" -> un moment précis, à l'heure locale.
 
-    Une date seule vaut le début du jour, ou la fin du jour si end_of_day est vrai.
+    Une date seule veut dire minuit (début du jour). Avec end_of_day=True, elle
+    veut dire 23:59:59 : "--to 2026-11-18" inclut donc toute la journée du 18.
     """
     text = text.strip()
     try:
-        if len(text) == 10:
-            moment = datetime.combine(date.fromisoformat(text), time.max if end_of_day else time.min)
+        if len(text) == 10:  # "AAAA-MM-JJ" fait 10 caractères
+            hour = time.max if end_of_day else time.min
+            moment = datetime.combine(date.fromisoformat(text), hour)
         else:
             moment = datetime.strptime(text, "%Y-%m-%d %H:%M")
     except ValueError as exc:
@@ -60,7 +74,11 @@ def parse_moment(text: str, end_of_day: bool = False) -> datetime:
 
 
 def parse_days(values: list[str]) -> set[int]:
-    """["weekdays"] -> {0..4} ; ["weekend"] -> {5, 6} ; ["lundi", "mardi"] -> {0, 1}."""
+    """Transforme les jours tapés en numéros (lundi = 0 ... dimanche = 6).
+
+    Exemples : ["weekdays"] -> {0, 1, 2, 3, 4} ; ["weekend"] -> {5, 6} ;
+    ["lundi", "mardi"] -> {0, 1}.
+    """
     days: set[int] = set()
     for value in values:
         for item in value.lower().split(","):
@@ -75,13 +93,14 @@ def parse_days(values: list[str]) -> set[int]:
                 days.add(_DAY_ALIASES[item])
             else:
                 raise VeloError(
-                    f"Jour invalide : « {item} » (weekdays, weekend, ou lundi, mardi... / mon, tue...)."
+                    f"Jour invalide : « {item} » "
+                    "(weekdays, weekend, ou lundi, mardi... / mon, tue...)."
                 )
     return days
 
 
 def parse_hours(text: str) -> tuple[int, int]:
-    """"7-9" -> (7, 9) : relevés de 7:00 inclus à 9:00 exclu."""
+    """"7-9" -> (7, 9). Ça veut dire : de 7:00 compris à 9:00 non compris (donc 7h et 8h)."""
     try:
         start_text, end_text = text.split("-")
         start, end = int(start_text), int(end_text)
@@ -92,12 +111,12 @@ def parse_hours(text: str) -> tuple[int, int]:
     return start, end
 
 
-# --- Sélection ---------------------------------------------------------------
+# --- 1. Trier ----------------------------------------------------------------------------
 
 
 @dataclass
 class Selection:
-    """Les critères de sélection des relevés (tous facultatifs)."""
+    """Tous les filtres de la requête. Ceux qu'on ne remplit pas ne filtrent rien."""
 
     day: date | None = None
     start: datetime | None = None
@@ -108,7 +127,7 @@ class Selection:
     station: str | None = None
 
     def keeps(self, record: Record, periods: list[Period]) -> bool:
-        """Vrai si le relevé correspond à tous les critères."""
+        """Vrai si le relevé passe TOUS les filtres. Un seul filtre raté -> on l'écarte."""
         moment = record.timestamp
         if self.station is not None and record.station_id != self.station:
             return False
@@ -129,21 +148,21 @@ class Selection:
         return True
 
 
-# --- Calcul ------------------------------------------------------------------
+# --- 2 et 3. Grouper et calculer --------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class ResultRow:
-    """Une ligne du résultat : un groupe et la valeur de chaque métrique."""
+    """Une ligne du résultat. Exemple : station "61", {"empty_rate": 72.0}, 120 relevés."""
 
     key: str
     values: dict[str, float]
-    count: int  # nombre de lignes (station x relevé) utilisées
+    count: int
 
 
 @dataclass
 class QueryResult:
-    """Le résultat complet d'une requête."""
+    """Le résultat complet, avec de quoi prévenir l'utilisateur s'il y a des trous."""
 
     rows: list[ResultRow]
     snapshot_count: int
@@ -152,7 +171,13 @@ class QueryResult:
 
 
 def compute_metric(metric: str, records: list[Record]) -> float:
-    """Calcule une métrique sur une liste de relevés (non vide). Les taux sont en %."""
+    """Calcule une métrique sur un paquet de relevés.
+
+    avg_bikes : nombre moyen de vélos. Exemple : 0, 2, 4 -> 2,0.
+    avg_docks : nombre moyen de places libres.
+    empty_rate : % des relevés où il y avait 0 vélo. Exemple : vide 1 fois sur 4 -> 25 %.
+    full_rate : % des relevés où il y avait 0 place libre.
+    """
     n = len(records)
     if metric == "avg_bikes":
         return sum(r.bikes for r in records) / n
@@ -166,7 +191,12 @@ def compute_metric(metric: str, records: list[Record]) -> float:
 
 
 def group_key(record: Record, by: str | None) -> str:
-    """Le nom du groupe d'un relevé selon --by."""
+    """Le nom du paquet où ranger un relevé, selon --by.
+
+    --by station -> "61" ; --by hour -> "08h" ; --by weekday -> "0-lundi" ;
+    --by day -> "2026-11-18" ; sans --by -> un seul paquet, "réseau".
+    (Le "0-" devant "lundi" sert juste à trier les jours dans le bon ordre.)
+    """
     if by == "station":
         return record.station_id
     if by == "hour":
@@ -186,13 +216,15 @@ def run_query(
     by: str | None = None,
     top: int | None = None,
 ) -> QueryResult:
-    """Exécute une requête sur l'historique."""
+    """Fait toute la requête : trier, grouper, calculer, classer."""
+    # Les numéros de période sont calculés sur TOUT l'historique, comme dans velo history.
     periods = find_periods([r.timestamp for r in records], interval_seconds)
     known = {p.number for p in periods}
     unknown = [n for n in selection.periods if n not in known]
     if unknown:
         raise NoDataError(f"Période(s) inconnue(s) : {', '.join(map(str, unknown))}.")
 
+    # 1. Trier
     selected = [r for r in records if selection.keeps(r, periods)]
     usable = [r for r in selected if not r.out_of_service]
     if not usable:
@@ -201,14 +233,19 @@ def run_query(
     moments = sorted({r.timestamp for r in usable})
     used = [p.number for p in periods if any(p.contains(m) for m in moments)]
 
+    # 2. Grouper : defaultdict(list) crée tout seul une liste vide pour un nouveau paquet
     groups: dict[str, list[Record]] = defaultdict(list)
     for record in usable:
         groups[group_key(record, by)].append(record)
 
+    # 3. Calculer
     rows = [
         ResultRow(key, {m: compute_metric(m, recs) for m in metrics}, len(recs))
         for key, recs in groups.items()
     ]
+
+    # Classer : par station (ou avec --top), la plus haute valeur en premier ;
+    # par heure ou par jour, dans l'ordre du temps.
     if by in ("station", None) or top is not None:
         rows.sort(key=lambda row: (-row.values[metrics[0]], row.key))
     else:
@@ -225,7 +262,11 @@ def run_query(
 
 
 def _window_not_covered(selection: Selection, moments: list[datetime], interval: int) -> bool:
-    """Vrai si la fenêtre de dates demandée commence avant ou finit après les relevés."""
+    """Vrai s'il manque des relevés au début ou à la fin des dates demandées.
+
+    Exemple : tu demandes toute la journée du 18, mais tu n'as collecté que de 7h
+    à 10h -> il y a des trous, on préviendra l'utilisateur.
+    """
     start, end = selection.start, selection.end
     if selection.day is not None:
         start = datetime.combine(selection.day, time.min).astimezone()
@@ -234,7 +275,7 @@ def _window_not_covered(selection: Selection, moments: list[datetime], interval:
     if start is not None and moments[0] - start > gap:
         return True
     if end is not None:
-        end = min(end, datetime.now().astimezone())
+        end = min(end, datetime.now().astimezone())  # on ne reproche pas le futur
         if end - moments[-1] > gap:
             return True
     return False

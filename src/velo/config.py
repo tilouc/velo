@@ -1,8 +1,18 @@
-"""Lecture, validation et création du fichier config.yaml.
+"""Les réglages de l'utilisateur (le fichier config.yaml).
 
-Ce module s'occupe de deux étages de la règle de priorité :
-« valeur du fichier config.yaml, sinon valeur par défaut du code ».
-Le troisième étage (l'option tapée dans la commande) est géré par la CLI.
+Pense à un thermostat :
+- la valeur d'usine, c'est la valeur par défaut écrite ici, dans le code ;
+- la valeur que tu as programmée, c'est celle de config.yaml ;
+- la valeur « juste pour ce soir », c'est une option tapée dans la commande.
+
+Ce fichier s'occupe des deux premiers étages : « config.yaml, sinon défaut ».
+Le troisième (l'option) est géré plus haut, dans commands.py.
+
+Il fait trois choses :
+1. lire config.yaml ;
+2. compléter : un réglage absent prend sa valeur par défaut ;
+3. vérifier : un réglage faux (« banane » au lieu d'un nombre) arrête tout
+   avec un message qui dit QUEL réglage est faux.
 """
 
 from __future__ import annotations
@@ -19,7 +29,7 @@ import yaml
 
 from velo.errors import ConfigError
 
-# --- Valeurs par défaut (le « réglage d'usine ») -----------------------------
+# --- Les valeurs par défaut (le « réglage d'usine ») ---------------------------
 
 DEFAULT_NETWORK_NAME = "V'Lille"
 DEFAULT_GBFS_URL = "https://media.ilevia.fr/opendata/gbfs.json"
@@ -36,9 +46,11 @@ LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
 
 def default_config_path() -> Path:
-    """Renvoie l'emplacement par défaut de config.yaml selon le système.
+    """Où ranger config.yaml si l'utilisateur ne dit rien.
 
-    La variable d'environnement VELO_CONFIG permet de le changer (utile pour les tests).
+    Linux : ~/.config/velo/config.yaml
+    Windows : C:\\Users\\<toi>\\AppData\\Roaming\\velo\\config.yaml
+    Si la variable d'environnement VELO_CONFIG existe, on prend son chemin à la place.
     """
     if "VELO_CONFIG" in os.environ:
         return Path(os.environ["VELO_CONFIG"])
@@ -50,7 +62,11 @@ def default_config_path() -> Path:
 
 
 def default_data_folder() -> Path:
-    """Renvoie le dossier de données par défaut selon le système."""
+    """Où ranger les données si l'utilisateur ne dit rien.
+
+    Linux : ~/.local/share/velo
+    Windows : C:\\Users\\<toi>\\AppData\\Local\\velo
+    """
     if sys.platform == "win32":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
     else:
@@ -59,17 +75,24 @@ def default_data_folder() -> Path:
 
 
 def slugify(name: str) -> str:
-    """Transforme un nom de réseau en nom de dossier : "V'Lille" -> "vlille"."""
+    """Transforme un nom de réseau en nom de dossier propre.
+
+    Exemple : "V'Lille" devient "vlille" (minuscules, sans accent, sans symbole).
+    """
     sans_accents = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z0-9]", "", sans_accents.lower()) or "reseau"
 
 
-# --- L'objet configuration ---------------------------------------------------
+# --- L'objet Config : tous les réglages, rangés et déjà vérifiés -----------------
 
 
 @dataclass(frozen=True)
 class Config:
-    """Tous les réglages de Vélo, déjà validés."""
+    """Tous les réglages, rangés dans une seule boîte.
+
+    Au lieu d'écrire donnees["alerts"]["low_bikes"] partout, le reste du code
+    écrit config.low_bikes. frozen=True : une fois créée, la boîte ne change plus.
+    """
 
     network_name: str
     gbfs_url: str
@@ -83,32 +106,37 @@ class Config:
 
     @property
     def network_folder(self) -> Path:
-        """Dossier du réseau : <dossier de données>/<nom du réseau>/."""
+        """Le dossier du réseau. Exemple : ~/.local/share/velo/vlille"""
         return self.data_folder / slugify(self.network_name)
 
     @property
     def history_folder(self) -> Path:
-        """Dossier des CSV collectés : <dossier du réseau>/history/."""
+        """Le dossier des CSV collectés. Exemple : ~/.local/share/velo/vlille/history"""
         return self.network_folder / "history"
 
 
-# --- Lecture et validation ---------------------------------------------------
+# --- Petits outils de lecture -------------------------------------------------------
 
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
-    """Renvoie la section `name` du YAML (un dictionnaire), ou {} si elle est absente."""
+    """Renvoie une section du YAML (par exemple « alerts »), ou {} si elle n'existe pas."""
     value = data.get(name)
     if value is None:
         return {}
     if not isinstance(value, dict):
-        raise ConfigError(f"Configuration invalide : la section « {name} » doit contenir des réglages.")
+        raise ConfigError(
+            f"Configuration invalide : la section « {name} » doit contenir des réglages."
+        )
     return value
 
 
 def _int(section: dict[str, Any], key: str, default: int, minimum: int, label: str) -> int:
-    """Lit un réglage entier, vérifie son type et sa valeur minimale."""
+    """Lit un réglage qui doit être un nombre entier, au moins égal à `minimum`.
+
+    Exemples avec low_bikes : absent -> le défaut ; 5 -> 5 ; "banane" -> erreur ; -1 -> erreur.
+    """
     value = section.get(key, default)
-    # bool est un sous-type de int en Python (True == 1) : on le refuse explicitement.
+    # Piège Python : True est considéré comme un entier (True == 1). On le refuse.
     if isinstance(value, bool) or not isinstance(value, int):
         raise ConfigError(f"Réglage {label} invalide : « {value} » n'est pas un nombre entier.")
     if value < minimum:
@@ -117,20 +145,22 @@ def _int(section: dict[str, Any], key: str, default: int, minimum: int, label: s
 
 
 def _text(section: dict[str, Any], key: str, default: str, label: str) -> str:
-    """Lit un réglage texte non vide."""
+    """Lit un réglage qui doit être un texte non vide."""
     value = section.get(key, default)
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"Réglage {label} invalide : un texte non vide est attendu.")
     return value.strip()
 
 
-def parse_config(data: Any) -> Config:
-    """Construit un Config à partir du contenu YAML déjà lu (un dictionnaire).
+# --- Lecture complète ------------------------------------------------------------
 
-    Chaque réglage absent prend sa valeur par défaut ; chaque réglage invalide
-    lève une ConfigError qui nomme le réglage concerné.
+
+def parse_config(data: Any) -> Config:
+    """Transforme le contenu du YAML (un dictionnaire) en objet Config.
+
+    Chaque réglage passe par _int ou _text : absent -> défaut, faux -> ConfigError.
     """
-    if data is None:
+    if data is None:  # fichier vide : tout prend sa valeur par défaut
         data = {}
     if not isinstance(data, dict):
         raise ConfigError("Configuration invalide : le fichier doit contenir des sections.")
@@ -175,12 +205,15 @@ def parse_config(data: Any) -> Config:
 
 
 def load_config(path: Path) -> Config:
-    """Lit et valide config.yaml. Lève ConfigError si le fichier est absent ou invalide."""
+    """Ouvre config.yaml, le lit, le vérifie, et renvoie un Config.
+
+    Fichier absent -> « lancez d'abord velo init ». YAML mal écrit -> message clair.
+    """
     if not path.exists():
         raise ConfigError(f"Configuration introuvable ({path}). Lancez d'abord : velo init")
     try:
         with path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+            data = yaml.safe_load(f)  # le texte YAML devient un dictionnaire Python
     except yaml.YAMLError as exc:
         raise ConfigError(f"Configuration illisible ({path}) : le YAML est mal formé.") from exc
     except OSError as exc:
@@ -188,7 +221,7 @@ def load_config(path: Path) -> Config:
     return parse_config(data)
 
 
-# --- Création du fichier par défaut (velo init) ------------------------------
+# --- Création du fichier (velo init) ----------------------------------------------
 
 CONFIG_TEMPLATE = """\
 network:
@@ -217,10 +250,9 @@ logging:
 
 
 def write_default_config(path: Path, data_folder: Path | None = None) -> None:
-    """Écrit un config.yaml avec les valeurs par défaut (écrase le fichier s'il existe)."""
+    """Écrit un config.yaml rempli avec les valeurs par défaut (écrase l'ancien s'il existe)."""
     folder = data_folder or default_data_folder()
     content = CONFIG_TEMPLATE.format(
-        # yaml.safe_dump sur une valeur seule gère les guillemets (l'apostrophe de V'Lille...).
         name=_yaml_scalar(DEFAULT_NETWORK_NAME),
         url=DEFAULT_GBFS_URL,
         folder=_yaml_scalar(str(folder)),
@@ -231,10 +263,14 @@ def write_default_config(path: Path, data_folder: Path | None = None) -> None:
         refresh=DEFAULT_DASHBOARD_REFRESH,
         level=DEFAULT_LOG_LEVEL,
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)  # crée ~/.config/velo/ s'il n'existe pas
     path.write_text(content, encoding="utf-8")
 
 
 def _yaml_scalar(value: str) -> str:
-    """Écrit une valeur texte au format YAML, avec guillemets si nécessaire."""
-    return yaml.safe_dump(value, allow_unicode=True, default_style=None).strip().removesuffix("...").strip()
+    """Écrit un texte au format YAML, en ajoutant des guillemets si besoin.
+
+    Exemple : l'apostrophe de V'Lille oblige à écrire "V'Lille" entre guillemets.
+    """
+    dumped = yaml.safe_dump(value, allow_unicode=True)
+    return dumped.strip().removesuffix("...").strip()

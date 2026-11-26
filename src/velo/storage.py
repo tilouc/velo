@@ -1,8 +1,17 @@
-"""Enregistrement et lecture de l'historique au format CSV.
+"""L'historique : écrire les relevés dans des fichiers CSV, puis les relire.
 
-Un fichier par jour (AAAA-MM-JJ.csv), une ligne par station et par relevé :
+Pourquoi ? V'Lille ne donne que l'état d'AUJOURD'HUI, MAINTENANT. Pour savoir
+si une station est souvent vide le matin, il faut noter soi-même son état,
+encore et encore, et garder ces notes. C'est le rôle de velo collect.
+
+Un CSV, c'est un tableau écrit en texte : une ligne par station et par relevé,
+les colonnes séparées par des virgules. Un fichier par jour (2026-11-18.csv) :
+
 timestamp,station_id,bikes,docks,is_installed,is_renting,is_returning,last_reported
-Les dates sont en ISO 8601, heure locale avec décalage horaire.
+2026-11-18T08:14:00+01:00,42,3,17,true,true,true,2026-11-18T08:13:41+01:00
+
+Les dates sont au format ISO 8601 avec le décalage horaire (+01:00 en hiver à
+Lille). L'énoncé l'impose pour que n'importe quel groupe puisse lire nos fichiers.
 """
 
 from __future__ import annotations
@@ -25,7 +34,7 @@ COLUMNS = [
 
 @dataclass(frozen=True)
 class Record:
-    """Une ligne de l'historique : une station dans un relevé."""
+    """Une ligne du CSV relue : une station, à l'heure d'un relevé."""
 
     timestamp: datetime
     station_id: str
@@ -37,25 +46,33 @@ class Record:
 
     @property
     def out_of_service(self) -> bool:
-        """Même définition que states.is_out_of_service."""
+        """Même définition que dans states.py : il manque une des trois conditions."""
         return not (self.is_installed and self.is_renting and self.is_returning)
 
 
 def _bool(value: bool) -> str:
+    """True -> "true", False -> "false" (le format demandé dans le CSV)."""
     return "true" if value else "false"
 
 
 def file_for(history_folder: Path, moment: datetime) -> Path:
-    """Fichier CSV du jour d'un relevé."""
+    """Le fichier du jour d'un relevé. Exemple : relevé du 18/11 -> history/2026-11-18.csv"""
     return history_folder / f"{moment.date().isoformat()}.csv"
 
 
 def append_snapshot(history_folder: Path, snapshot: Snapshot) -> Path:
-    """Ajoute un relevé à la fin du fichier du jour (créé avec son en-tête si besoin)."""
+    """Ajoute un relevé à la FIN du fichier du jour.
+
+    "a" = append = ajouter à la fin, sans effacer ce qui existe. Si le fichier
+    n'existe pas encore, on écrit d'abord la ligne des titres de colonnes.
+    Un relevé pris après minuit va tout seul dans le fichier du lendemain,
+    puisque le nom du fichier vient de la date du relevé.
+    """
     history_folder.mkdir(parents=True, exist_ok=True)
     path = file_for(history_folder, snapshot.last_updated)
     is_new = not path.exists() or path.stat().st_size == 0
     timestamp = snapshot.last_updated.isoformat(timespec="seconds")
+    # newline="" : demandé par l'énoncé, évite des lignes vides en trop sous Windows
     with path.open("a", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         if is_new:
@@ -70,13 +87,14 @@ def append_snapshot(history_folder: Path, snapshot: Snapshot) -> Path:
 
 
 def history_files(history_folder: Path) -> list[Path]:
-    """Les fichiers CSV de l'historique, du plus ancien au plus récent."""
+    """Tous les fichiers de l'historique, du plus vieux au plus récent."""
     if not history_folder.exists():
         return []
-    return sorted(history_folder.glob("????-??-??.csv"))
+    return sorted(history_folder.glob("????-??-??.csv"))  # ? = un caractère quelconque
 
 
 def _parse_bool(text: str) -> bool:
+    """"true" -> True, "false" -> False. Autre chose -> erreur."""
     lowered = text.strip().lower()
     if lowered in ("true", "1"):
         return True
@@ -86,6 +104,7 @@ def _parse_bool(text: str) -> bool:
 
 
 def _parse_row(row: dict[str, str]) -> Record:
+    """Transforme une ligne de texte du CSV en Record, en vérifiant chaque colonne."""
     timestamp = datetime.fromisoformat(row["timestamp"])
     if timestamp.tzinfo is None:
         raise ValueError("date sans décalage horaire")
@@ -106,10 +125,14 @@ def _parse_row(row: dict[str, str]) -> Record:
 
 
 def read_file(path: Path) -> list[Record]:
-    """Lit un fichier CSV. Les lignes invalides sont ignorées et journalisées."""
+    """Relit un fichier CSV.
+
+    Une ligne abîmée est sautée et notée dans le journal (avec son numéro de
+    ligne). Une seule mauvaise ligne ne doit pas rendre tout l'historique illisible.
+    """
     records = []
     with path.open(encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
+        reader = csv.DictReader(f)  # chaque ligne devient {"timestamp": "...", "bikes": "3", ...}
         missing = set(COLUMNS) - set(reader.fieldnames or [])
         if missing:
             log.warning("%s ignoré : colonnes manquantes %s", path.name, sorted(missing))
@@ -123,7 +146,7 @@ def read_file(path: Path) -> list[Record]:
 
 
 def read_history(history_folder: Path) -> list[Record]:
-    """Lit tout l'historique, trié par date."""
+    """Relit TOUT l'historique, trié du plus vieux au plus récent."""
     records: list[Record] = []
     for path in history_files(history_folder):
         records.extend(read_file(path))
@@ -132,7 +155,10 @@ def read_history(history_folder: Path) -> list[Record]:
 
 
 def last_timestamp(history_folder: Path) -> datetime | None:
-    """Date du dernier relevé enregistré (pour ne pas l'enregistrer deux fois)."""
+    """L'heure du dernier relevé enregistré (ou None s'il n'y en a aucun).
+
+    Sert à ne pas enregistrer deux fois la même photo du réseau.
+    """
     files = history_files(history_folder)
     for path in reversed(files):
         records = read_file(path)

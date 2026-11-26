@@ -1,7 +1,9 @@
-"""Gestion des stations favorites.
+"""Les stations favorites (velo favorites, add, remove).
 
-Les favoris sont enregistrés dans <dossier du réseau>/favorites.json (un fichier
-géré par l'outil, pas dans config.yaml) : une simple liste d'identifiants.
+Les favoris sont rangés dans un petit fichier, favorites.json, dans le dossier
+du réseau. Il contient juste une liste de numéros, par exemple ["43", "10"].
+L'énoncé demande que ce ne soit PAS dans config.yaml : config.yaml, c'est
+l'utilisateur qui l'écrit à la main ; favorites.json, c'est l'outil qui le gère.
 """
 
 from __future__ import annotations
@@ -15,17 +17,21 @@ from velo.models import StationInfo
 
 log = logging.getLogger(__name__)
 
-MAX_FAVORITES = 10
+MAX_FAVORITES = 10  # imposé par l'énoncé, le même pour tous les groupes
 FILE_NAME = "favorites.json"
 
 
 def favorites_path(network_folder: Path) -> Path:
-    """Emplacement du fichier des favoris."""
+    """L'emplacement du fichier. Exemple : ~/.local/share/velo/vlille/favorites.json"""
     return network_folder / FILE_NAME
 
 
 def load_favorites(network_folder: Path) -> list[str]:
-    """Lit la liste des favoris (liste vide si le fichier n'existe pas)."""
+    """Lit la liste des favoris.
+
+    Pas de fichier ? Liste vide. Fichier abîmé ? Liste vide aussi, avec un
+    avertissement dans le journal, plutôt que de faire planter la commande.
+    """
     path = favorites_path(network_folder)
     if not path.exists():
         return []
@@ -41,7 +47,7 @@ def load_favorites(network_folder: Path) -> list[str]:
 
 
 def save_favorites(network_folder: Path, favorites: list[str]) -> None:
-    """Enregistre la liste des favoris."""
+    """Écrit la liste des favoris dans le fichier."""
     network_folder.mkdir(parents=True, exist_ok=True)
     favorites_path(network_folder).write_text(json.dumps(favorites, indent=2), encoding="utf-8")
 
@@ -49,7 +55,11 @@ def save_favorites(network_folder: Path, favorites: list[str]) -> None:
 def add_favorite(
     network_folder: Path, station_id: str, stations: dict[str, StationInfo]
 ) -> StationInfo:
-    """Ajoute une station aux favoris et la renvoie. Lève VeloError si c'est impossible."""
+    """Ajoute une station aux favoris, et renvoie sa fiche (pour afficher son nom).
+
+    Trois refus possibles, chacun avec un message clair : numéro inconnu,
+    station déjà en favori, liste déjà pleine (10).
+    """
     if station_id not in stations:
         raise VeloError(
             f"Station {station_id} inconnue. Cherchez son identifiant avec : velo station search"
@@ -69,7 +79,7 @@ def add_favorite(
 
 
 def remove_favorite(network_folder: Path, station_id: str) -> None:
-    """Retire une station des favoris. Lève VeloError si elle n'y est pas."""
+    """Retire une station des favoris. Erreur claire si elle n'y était pas."""
     favorites = load_favorites(network_folder)
     if station_id not in favorites:
         raise VeloError(f"La station {station_id} n'est pas dans vos favoris.")

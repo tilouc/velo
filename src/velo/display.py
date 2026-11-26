@@ -1,8 +1,12 @@
-"""Tout l'affichage dans le terminal (avec Rich). Aucun calcul ici.
+"""Tout ce qui s'affiche dans le terminal. Ici, on met en forme : on ne calcule rien.
 
-Chaque fonction reçoit des résultats déjà calculés et renvoie un objet
-« affichable » Rich. Les commandes l'impriment ; le tableau de bord assemble
-les mêmes objets sur un seul écran.
+Chaque fonction reçoit des résultats déjà calculés (par states.py, query.py...)
+et renvoie un objet « affichable » de la bibliothèque Rich (un tableau, un texte).
+Les commandes l'impriment. Le tableau de bord, lui, assemble les MÊMES objets
+sur un seul écran : c'est pour ça qu'on n'écrit jamais deux fois le même affichage.
+
+Rich, c'est une bibliothèque qui fait de jolis tableaux et des couleurs dans le
+terminal. Dans un texte Rich, [bold]...[/] veut dire « en gras ».
 """
 
 from __future__ import annotations
@@ -18,8 +22,8 @@ from velo.models import StationInfo, StationStatus
 from velo.query import WEEKDAY_NAMES, QueryResult
 from velo.states import Alert, Alerts, FavoriteRow, NetworkSummary
 
-console = Console()
-error_console = Console(stderr=True)
+console = Console()  # l'écran normal (les résultats)
+error_console = Console(stderr=True)  # l'écran des erreurs et avertissements
 
 LABEL_STYLES = {
     "hors service": "bold magenta",
@@ -31,50 +35,52 @@ LABEL_STYLES = {
 
 
 def format_moment(moment: datetime) -> str:
-    """16/11/2026 à 12:05"""
+    """Exemple : "16/11/2026 à 12:05"."""
     return moment.strftime("%d/%m/%Y à %H:%M")
 
 
 def format_short(moment: datetime) -> str:
-    """16/11/2026 12:05"""
+    """Exemple : "16/11/2026 12:05"."""
     return moment.strftime("%d/%m/%Y %H:%M")
 
 
 def _label(label: str) -> Text:
+    """Un état ("vide", "pleine"...) avec sa couleur."""
     return Text(label, style=LABEL_STYLES.get(label, ""))
 
 
 def _delta(value: int | None) -> str:
+    """Une évolution entre parenthèses. Exemple : -2 -> "(-2)". Rien si 0 ou inconnue."""
     if not value:
         return ""
     return f"({value:+d})"
 
 
-# --- Messages ----------------------------------------------------------------
+# --- Messages ------------------------------------------------------------------------
 
 
 def print_error(message: str) -> None:
-    """Message d'erreur clair, sans trace d'exception."""
+    """Affiche « Erreur : ... » en une ligne, sans le pavé technique de Python."""
     error_console.print(f"[bold red]Erreur :[/] {message}")
 
 
 def print_warning(message: str) -> None:
-    """Avertissement : le résultat est à interpréter avec prudence."""
+    """Affiche « Avertissement : ... » : le résultat est là, mais à prendre avec prudence."""
     error_console.print(f"[yellow]Avertissement :[/] {message}")
 
 
-# --- velo status ---------------------------------------------------------------
+# --- velo status ---------------------------------------------------------------------------
 
 
 def render_status(network_name: str, moment: datetime, summary: NetworkSummary) -> Group:
-    """Le résumé du réseau, avec son titre."""
+    """L'écran de velo status : un titre, puis les chiffres."""
     title = Text(f"{network_name} - données du {format_moment(moment)}", style="bold")
     return Group(title, Text(""), render_summary(summary))
 
 
 def render_summary(summary: NetworkSummary) -> Table:
-    """Les chiffres du réseau (réutilisés par le tableau de bord)."""
-    table = Table.grid(padding=(0, 3))
+    """Les chiffres du réseau, sans titre (le tableau de bord les réutilise)."""
+    table = Table.grid(padding=(0, 3))  # grid = tableau sans bordures
     table.add_column(style="bold")
     table.add_column()
     table.add_column()
@@ -93,11 +99,11 @@ def render_summary(summary: NetworkSummary) -> Table:
     return table
 
 
-# --- velo station --------------------------------------------------------------
+# --- velo station ------------------------------------------------------------------------
 
 
 def render_station_list(stations: list[StationInfo]) -> Table:
-    """Liste de stations : identifiant et nom."""
+    """Un tableau à deux colonnes : numéro et nom."""
     table = Table(box=None, header_style="bold")
     table.add_column("ID", justify="right")
     table.add_column("Station")
@@ -109,7 +115,7 @@ def render_station_list(stations: list[StationInfo]) -> Table:
 def render_station_detail(
     info: StationInfo, status: StationStatus | None, label: str
 ) -> Table:
-    """Fiche détaillée d'une station."""
+    """La fiche d'une station : nom, capacité, vélos, places, état."""
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold")
     table.add_column()
@@ -125,11 +131,11 @@ def render_station_detail(
     return table
 
 
-# --- velo favorites ------------------------------------------------------------
+# --- velo favorites ----------------------------------------------------------------------
 
 
 def render_favorites(rows: list[FavoriteRow]) -> Table:
-    """Tableau des favoris (avec l'évolution si elle est connue)."""
+    """Le tableau des favoris. Dans le tableau de bord, l'évolution s'ajoute : "3 (-2)"."""
     table = Table(box=None, header_style="bold")
     table.add_column("ID", justify="right")
     table.add_column("Station")
@@ -144,7 +150,7 @@ def render_favorites(rows: list[FavoriteRow]) -> Table:
 
 
 def render_no_favorites() -> Text:
-    """Explication quand il n'y a aucun favori."""
+    """Le message quand il n'y a aucun favori : on explique comment en ajouter."""
     return Text.from_markup(
         "Aucun favori pour l'instant.\n"
         "Trouvez l'identifiant d'une station avec [bold]velo station search <nom>[/], "
@@ -152,10 +158,11 @@ def render_no_favorites() -> Text:
     )
 
 
-# --- velo alerts -----------------------------------------------------------------
+# --- velo alerts ---------------------------------------------------------------------------
 
 
 def _alert_list(alerts: list[Alert], value: str) -> str:
+    """Une liste d'alertes sur une ligne. Exemple : "43 Gare Lille Flandres (0), 61 Gambetta (1)"."""
     if value == "bikes":
         return ", ".join(f"{a.station_id} {a.name} ({a.bikes})" for a in alerts)
     if value == "docks":
@@ -166,7 +173,7 @@ def _alert_list(alerts: list[Alert], value: str) -> str:
 
 
 def render_alerts(alerts: Alerts) -> Table | Text:
-    """Les alertes classées par type."""
+    """Les alertes, une ligne par type. Sans alerte, une phrase pour le dire."""
     if alerts.count == 0:
         return Text("Aucune alerte : toutes les stations fonctionnent normalement.", style="green")
     table = Table.grid(padding=(0, 3))
@@ -184,11 +191,11 @@ def render_alerts(alerts: Alerts) -> Table | Text:
     return table
 
 
-# --- velo history ------------------------------------------------------------------
+# --- velo history ----------------------------------------------------------------------------
 
 
 def render_history(network_name: str, periods: list[Period]) -> Group:
-    """La liste des périodes collectées."""
+    """Le tableau des périodes : numéro, début, fin, durée, nombre de relevés."""
     total = sum(p.count for p in periods)
     table = Table(box=None, header_style="bold")
     table.add_column("#", justify="right")
@@ -204,14 +211,16 @@ def render_history(network_name: str, periods: list[Period]) -> Group:
     return Group(Text(title, style="bold"), Text(""), table)
 
 
-# --- velo query --------------------------------------------------------------------
+# --- velo query ------------------------------------------------------------------------------
 
 
 def _metric_value(metric: str, value: float) -> str:
+    """Un taux s'affiche en % sans virgule ("72 %"), une moyenne avec une décimale ("3.4")."""
     return f"{value:.0f} %" if metric.endswith("_rate") else f"{value:.1f}"
 
 
 def _group_label(key: str, by: str | None, stations: dict[str, StationInfo]) -> str:
+    """Rend le nom d'un paquet lisible : "61" -> "61 Gambetta", "0-lundi" -> "lundi"."""
     if by == "station":
         info = stations.get(key)
         return f"{key} {info.name}" if info else key
@@ -223,7 +232,7 @@ def _group_label(key: str, by: str | None, stations: dict[str, StationInfo]) -> 
 def render_query(
     result: QueryResult, metrics: list[str], by: str | None, stations: dict[str, StationInfo]
 ) -> Group:
-    """Le résultat d'une requête sur l'historique."""
+    """Le résultat d'une requête : d'où viennent les données, puis le tableau."""
     periods = ", ".join(map(str, result.periods_used))
     header = Text(
         f"Données : période{'s' if len(result.periods_used) > 1 else ''} {periods} - "
@@ -242,7 +251,7 @@ def render_query(
     return Group(header, Text(""), table)
 
 
-# --- velo dashboard ----------------------------------------------------------------
+# --- velo dashboard --------------------------------------------------------------------------
 
 
 def render_dashboard(
@@ -254,7 +263,11 @@ def render_dashboard(
     alerts: Alerts,
     error: str | None,
 ) -> Group:
-    """Un écran complet du tableau de bord, assemblé avec les mêmes briques."""
+    """Un écran complet du tableau de bord, construit avec les briques ci-dessus.
+
+    Regarde bien : render_summary, render_favorites et render_alerts sont les
+    mêmes fonctions que pour velo status, velo favorites et velo alerts.
+    """
     header = Text.assemble(
         (f"{network_name}", "bold"),
         f" - données du {format_moment(moment)} - prochaine mise à jour dans {seconds_left} s",

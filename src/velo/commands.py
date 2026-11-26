@@ -1,8 +1,13 @@
-"""Une fonction par commande : elle relie les modules entre eux.
+"""Une fonction par commande. C'est le chef d'orchestre : il ne fait rien lui-même,
+il demande aux autres fichiers, dans l'ordre.
 
-Chaque commande suit le même trajet :
-réglages (config) -> données (gbfs / storage) -> calculs (states / history / query)
--> affichage (display). Elle renvoie le code de sortie (0 = tout va bien).
+Toutes les commandes suivent le même trajet :
+  1. les réglages      -> config.py
+  2. les données       -> gbfs.py (internet) ou storage.py (historique)
+  3. les calculs       -> states.py, search.py, history.py, query.py
+  4. l'affichage       -> display.py
+
+Chaque fonction renvoie un code de sortie : 0 = tout s'est bien passé.
 """
 
 from __future__ import annotations
@@ -33,20 +38,24 @@ log = logging.getLogger(__name__)
 
 
 def pick(option: int | None, configured: int) -> int:
-    """Règle de priorité : l'option de la commande, sinon la valeur de config.yaml
-    (qui contient déjà la valeur par défaut du code si le réglage était absent)."""
+    """La règle de priorité, en une ligne : l'option tapée gagne, sinon config.yaml.
+
+    Exemple : velo alerts --low-bikes 5 -> option = 5 -> on prend 5.
+              velo alerts               -> option = None -> on prend config.low_bikes.
+    (config.low_bikes contient déjà la valeur par défaut si config.yaml ne disait rien.)
+    """
     return configured if option is None else option
 
 
 def check_minimum(value: int, minimum: int, option: str) -> int:
-    """Refuse une option inférieure au minimum autorisé."""
+    """Refuse une option trop petite. Exemple : --interval 10 alors que le minimum est 60."""
     if value < minimum:
         raise VeloError(f"{option} doit valoir au moins {minimum} secondes.")
     return value
 
 
 def warn_if_static_files_old(config: Config) -> None:
-    """Avertit si les fichiers qui changent rarement sont absents ou trop vieux."""
+    """Prévient si les infos sur les stations manquent ou datent de plus de max_age_days jours."""
     date = gbfs.static_files_date(config.network_folder)
     if date is None:
         display.print_warning("fichiers du réseau absents. Lancez : velo refresh")
@@ -57,11 +66,15 @@ def warn_if_static_files_old(config: Config) -> None:
         )
 
 
-# --- velo init ------------------------------------------------------------------
+# --- velo init ------------------------------------------------------------------------
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    """Crée la configuration et les dossiers, puis teste la connexion."""
+    """Prépare tout au premier lancement : la config, les dossiers, puis un test de connexion.
+
+    Si internet ne marche pas, la config et les dossiers sont quand même créés :
+    on affiche juste un avertissement.
+    """
     config_path: Path = args.config or default_config_path()
     if config_path.exists() and not args.force:
         display.console.print(
@@ -90,11 +103,11 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
-# --- velo refresh ----------------------------------------------------------------
+# --- velo refresh ----------------------------------------------------------------------
 
 
 def cmd_refresh(args: argparse.Namespace, config: Config) -> int:
-    """Retélécharge les trois fichiers qui changent rarement."""
+    """Retélécharge les trois fichiers qui changent rarement (stations, réseau, types de vélos)."""
     gbfs.download_static_files(config.gbfs_url, config.network_folder)
     count = len(gbfs.load_stations(config.network_folder))
     moment = datetime.now().astimezone()
@@ -105,23 +118,25 @@ def cmd_refresh(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
-# --- velo status ------------------------------------------------------------------
+# --- velo status ---------------------------------------------------------------------------
 
 
 def cmd_status(args: argparse.Namespace, config: Config) -> int:
-    """Résumé de l'état du réseau en temps réel."""
+    """Le résumé du réseau, en direct : télécharger -> compter -> afficher."""
     warn_if_static_files_old(config)
-    snapshot = gbfs.fetch_snapshot(config.gbfs_url)
-    summary = states.summarize(snapshot)
-    display.console.print(display.render_status(config.network_name, snapshot.last_updated, summary))
+    snapshot = gbfs.fetch_snapshot(config.gbfs_url)  # 2. les données
+    summary = states.summarize(snapshot)  # 3. le calcul
+    display.console.print(  # 4. l'affichage
+        display.render_status(config.network_name, snapshot.last_updated, summary)
+    )
     return 0
 
 
-# --- velo station ------------------------------------------------------------------
+# --- velo station ----------------------------------------------------------------------------
 
 
 def cmd_station(args: argparse.Namespace, config: Config) -> int:
-    """Lister, chercher ou consulter une station."""
+    """Trois actions : list (toutes les stations), search (chercher), show (une station en direct)."""
     stations = gbfs.load_stations(config.network_folder)
     warn_if_static_files_old(config)
 
@@ -147,11 +162,11 @@ def cmd_station(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
-# --- velo favorites -----------------------------------------------------------------
+# --- velo favorites ---------------------------------------------------------------------------
 
 
 def cmd_favorites(args: argparse.Namespace, config: Config) -> int:
-    """Afficher, ajouter ou retirer des favoris."""
+    """Sans action : affiche l'état des favoris. Avec add / remove : modifie la liste."""
     folder = config.network_folder
     if args.favorites_command == "add":
         info = favorites.add_favorite(folder, args.id, gbfs.load_stations(folder))
@@ -173,40 +188,45 @@ def cmd_favorites(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
-# --- velo alerts ---------------------------------------------------------------------
+# --- velo alerts -------------------------------------------------------------------------------
 
 
 def cmd_alerts(args: argparse.Namespace, config: Config) -> int:
-    """Liste des stations hors service, vides ou presque, pleines ou presque."""
+    """Les stations à problème. Les seuils viennent de l'option, sinon de config.yaml."""
     low_bikes = pick(args.low_bikes, config.low_bikes)
     low_docks = pick(args.low_docks, config.low_docks)
     stations = gbfs.load_stations(config.network_folder)
     warn_if_static_files_old(config)
     snapshot = gbfs.fetch_snapshot(config.gbfs_url)
     alerts = states.compute_alerts(snapshot, stations, low_bikes, low_docks)
-    display.console.print(
-        f"[bold]{config.network_name} - alertes du {display.format_moment(snapshot.last_updated)}[/]"
-    )
+    moment = display.format_moment(snapshot.last_updated)
+    display.console.print(f"[bold]{config.network_name} - alertes du {moment}[/]")
     display.console.print(display.render_alerts(alerts))
     return 0
 
 
-# --- velo dashboard -------------------------------------------------------------------
+# --- velo dashboard -----------------------------------------------------------------------------
 
 
 def cmd_dashboard(args: argparse.Namespace, config: Config) -> int:
-    """Tableau de bord mis à jour automatiquement (Ctrl+C pour quitter)."""
+    """Un écran qui se met à jour tout seul. Ctrl+C pour quitter.
+
+    Le principe : une boucle sans fin. Chaque seconde, on redessine l'écran avec
+    le compte à rebours. Quand il arrive à 0, on retélécharge les données.
+    Si internet coupe, on garde les dernières données et on affiche un avertissement.
+    """
     refresh = check_minimum(pick(args.refresh, config.dashboard_refresh),
                             MIN_DASHBOARD_REFRESH, "--refresh")
     low_bikes = pick(args.low_bikes, config.low_bikes)
     low_docks = pick(args.low_docks, config.low_docks)
     stations = gbfs.load_stations(config.network_folder)
 
-    current: Snapshot = gbfs.fetch_snapshot(config.gbfs_url)  # sans données, rien à afficher
-    previous: Snapshot | None = None
+    current: Snapshot = gbfs.fetch_snapshot(config.gbfs_url)  # sans premières données, rien à montrer
+    previous: Snapshot | None = None  # le relevé d'avant, pour calculer l'évolution des favoris
     error: str | None = None
 
     def screen(seconds_left: int) -> Group:
+        """Construit l'écran avec les mêmes calculs que status, favorites et alerts."""
         ids = favorites.load_favorites(config.network_folder)
         return display.render_dashboard(
             config.network_name,
@@ -219,33 +239,35 @@ def cmd_dashboard(args: argparse.Namespace, config: Config) -> int:
         )
 
     try:
+        # Live = un écran que Rich redessine sur place, au lieu d'écrire en dessous.
         with Live(screen(refresh), console=display.console, auto_refresh=False,
                   redirect_stderr=True, screen=False) as live:
             while True:
-                for seconds_left in range(refresh, 0, -1):
+                for seconds_left in range(refresh, 0, -1):  # 60, 59, ..., 1
                     live.update(screen(seconds_left), refresh=True)
                     time.sleep(1)
                 try:
                     new = gbfs.fetch_snapshot(config.gbfs_url)
                 except NetworkError as exc:
                     log.warning("Tableau de bord : %s", exc)
-                    error = str(exc)
+                    error = str(exc)  # on garde les anciennes données, on prévient
                 else:
                     if new.last_updated != current.last_updated:
                         previous, current = current, new
                     error = None
-    except KeyboardInterrupt:
+    except KeyboardInterrupt:  # Ctrl+C lève KeyboardInterrupt : on sort proprement
         display.console.print("Tableau de bord fermé.")
     return 0
 
 
-# --- velo collect ----------------------------------------------------------------------
+# --- velo collect --------------------------------------------------------------------------------
 
+# Accepte "3h", "90m", "90min", "1h30", "45s", "2h30m"...
 _DURATION = re.compile(r"^(?:(?P<h>\d+)h)?(?:(?P<m>\d+)(?:m|min)?)?(?:(?P<s>\d+)s)?$")
 
 
 def parse_duration(text: str) -> timedelta:
-    """"3h", "90m", "1h30", "45s" -> timedelta."""
+    """Transforme une durée tapée en vraie durée. Exemples : "3h", "90m", "1h30", "45s"."""
     match = _DURATION.match(text.strip().lower())
     if not text.strip() or not match or not any(match.groupdict().values()):
         raise VeloError(f"Durée invalide : « {text} » (exemples : 3h, 90m, 1h30, 45s).")
@@ -257,7 +279,7 @@ def parse_duration(text: str) -> timedelta:
 
 
 def parse_until(text: str) -> datetime:
-    """"2026-11-20 10:00" -> datetime local, qui doit être dans le futur."""
+    """"2026-11-20 10:00" -> un moment précis. Il doit être dans le futur."""
     try:
         moment = datetime.strptime(text.strip(), "%Y-%m-%d %H:%M").astimezone()
     except ValueError as exc:
@@ -268,10 +290,20 @@ def parse_until(text: str) -> datetime:
 
 
 def cmd_collect(args: argparse.Namespace, config: Config) -> int:
-    """Enregistre l'état de toutes les stations à intervalle régulier."""
+    """Prend une photo du réseau toutes les X secondes et l'écrit dans l'historique.
+
+    La boucle, en clair :
+      1. télécharger l'état des stations ;
+      2. si c'est la même photo que la dernière (même last_updated), ne rien écrire ;
+         sinon, l'ajouter au CSV du jour ;
+      3. s'il est l'heure d'arrêter (--duration, --until, --once), sortir ;
+      4. sinon, attendre l'intervalle, puis recommencer.
+    Une coupure internet ne stoppe pas la collecte : on note l'erreur et on réessaie.
+    À la fin, même après Ctrl+C, on affiche un bilan (le bloc finally s'exécute toujours).
+    """
     interval = check_minimum(pick(args.interval, config.interval_seconds),
                              MIN_INTERVAL_SECONDS, "--interval")
-    end: datetime | None = None
+    end: datetime | None = None  # None = pas d'heure de fin, on tourne jusqu'à Ctrl+C
     if args.duration:
         end = datetime.now().astimezone() + parse_duration(args.duration)
     elif args.until:
@@ -289,7 +321,7 @@ def cmd_collect(args: argparse.Namespace, config: Config) -> int:
             try:
                 snapshot = gbfs.fetch_snapshot(config.gbfs_url)
             except NetworkError as exc:
-                if args.once:
+                if args.once:  # avec --once, pas de deuxième chance : c'est une erreur
                     raise
                 log.error("%s - nouvel essai dans %d s", exc, interval)
             else:
@@ -311,7 +343,7 @@ def cmd_collect(args: argparse.Namespace, config: Config) -> int:
                 remaining = (end - datetime.now().astimezone()).total_seconds()
                 if remaining <= 0:
                     break
-                wait = min(wait, remaining)
+                wait = min(wait, remaining)  # ne pas attendre au-delà de l'heure de fin
             time.sleep(wait)
             if end is not None and datetime.now().astimezone() >= end:
                 break
@@ -328,16 +360,21 @@ def cmd_collect(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
-# --- velo history ----------------------------------------------------------------------
+# --- velo history -----------------------------------------------------------------------------
 
 
 def _all_periods(config: Config, interval: int) -> tuple[list[storage.Record], list[history.Period]]:
+    """Relit tout l'historique et le découpe en périodes."""
     records = storage.read_history(config.history_folder)
     return records, history.find_periods([r.timestamp for r in records], interval)
 
 
 def cmd_history(args: argparse.Namespace, config: Config) -> int:
-    """Affiche les périodes et relevés enregistrés."""
+    """Affiche les périodes collectées. --from / --to filtrent l'affichage.
+
+    On découpe TOUT l'historique d'abord, puis on filtre : ainsi la période 2 garde
+    toujours le numéro 2, ici comme dans velo query --period 2.
+    """
     interval = pick(args.interval, config.interval_seconds)
     _, periods = _all_periods(config, interval)
     start = query.parse_moment(args.date_from) if args.date_from else None
@@ -354,11 +391,15 @@ def cmd_history(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
-# --- velo query ------------------------------------------------------------------------
+# --- velo query ---------------------------------------------------------------------------------
 
 
 def cmd_query(args: argparse.Namespace, config: Config) -> int:
-    """Analyse l'historique enregistré."""
+    """Analyse l'historique : on transforme les options en filtres, puis query.py calcule.
+
+    S'il n'y a aucune donnée pour ces filtres, on le dit et on montre les périodes
+    disponibles, pour que l'utilisateur sache quoi demander.
+    """
     interval = pick(args.interval, config.interval_seconds)
     selection = query.Selection(
         day=query.parse_day(args.date) if args.date else None,
@@ -385,7 +426,7 @@ def cmd_query(args: argparse.Namespace, config: Config) -> int:
         try:
             stations = gbfs.load_stations(config.network_folder)
         except VeloError:
-            stations = {}  # sans les noms, on affiche seulement les identifiants
+            stations = {}  # sans les noms, on affiche seulement les numéros
     if result.interrupted:
         display.print_warning("la sélection comporte des interruptions.")
     display.console.print(display.render_query(result, args.metric, args.by, stations))

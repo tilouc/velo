@@ -1,18 +1,22 @@
-"""Erreurs propres à Vélo.
+"""Les erreurs de Vélo.
 
-Toute erreur « prévue » (réseau indisponible, identifiant inconnu, configuration
-invalide...) est levée sous la forme d'une VeloError. La CLI l'attrape, affiche
-son message à l'utilisateur et quitte avec un code non nul, sans trace d'exception.
+Le problème : quand quelque chose rate (internet coupé, mauvais numéro de
+station, config mal écrite), Python affiche par défaut un gros pavé illisible
+(une « trace d'exception »). L'énoncé l'interdit.
+
+La solution : chaque problème qu'on sait prévoir lève une VeloError avec une
+phrase claire dedans. Tout en haut, cli.py attrape ces VeloError, affiche juste
+la phrase, et quitte avec le code 1 (= « ça a raté »).
 """
 
 
 class VeloError(Exception):
-    """Erreur prévue, à afficher telle quelle à l'utilisateur."""
+    """Un problème prévu. Son message est fait pour être lu par l'utilisateur."""
 
 
 class ConfigError(VeloError):
-    """Le fichier config.yaml est absent ou contient une valeur invalide."""
+    """Le fichier config.yaml est absent, ou un réglage dedans est faux."""
 
 
 class NetworkError(VeloError):
-    """Le réseau GBFS est injoignable ou renvoie des données inutilisables."""
+    """Le site de V'Lille ne répond pas, ou renvoie des données inutilisables."""
