@@ -1,0 +1,8 @@
+timestamp,station_id,bikes,docks,is_installed,is_renting,is_returning,last_reported
+2026-11-18T08:00:00+01:00,1,0,20,true,true,true,2026-11-18T07:59:30+01:00
+2026-11-18T08:00:00+01:00,2,4,8,true,true,true,2026-11-18T07:59:30+01:00
+2026-11-18T08:02:00+01:00,1,1,19,true,true,true,2026-11-18T08:01:30+01:00
+2026-11-18T08:02:00+01:00,2,0,12,true,true,true,2026-11-18T08:01:30+01:00
+ceci n'est pas une ligne valide
+2026-11-18T08:04:00+01:00,1,0,20,true,true,true,2026-11-18T08:03:30+01:00
+2026-11-18T08:04:00+01:00,2,6,6,false,false,false,2026-11-18T08:03:30+01:00

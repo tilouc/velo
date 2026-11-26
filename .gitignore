@@ -1,0 +1,12 @@
+# fichiers générés automatiquement : ils se recréent tout seuls
+.venv/
+__pycache__/
+.ruff_cache/
+.pytest_cache/
+
+# journaux et données collectées (peuvent devenir volumineux)
+*.log
+history/
+
+# document du prof
+enonce.pdf

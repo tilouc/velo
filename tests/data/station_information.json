@@ -1,0 +1,15 @@
+{
+  "last_updated": 1795431600,
+  "ttl": 0,
+  "version": "2.3",
+  "data": {
+    "stations": [
+      {"station_id": "1", "name": "Gare Lille Flandres", "capacity": 20},
+      {"station_id": "2", "name": "Solférino", "capacity": 12},
+      {"station_id": "3", "name": "Rihour", "capacity": 12},
+      {"station_id": "4", "name": "Porte de Douai", "capacity": 10},
+      {"station_id": "5", "name": "Vauban", "capacity": 16},
+      {"station_id": "10", "name": "Gare Lille Europe", "capacity": 30}
+    ]
+  }
+}

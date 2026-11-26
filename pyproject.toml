@@ -1,0 +1,37 @@
+[project]
+name = "velo"
+version = "0.1.0"
+description = "Outil en ligne de commande pour suivre et analyser le réseau V'Lille (données GBFS)"
+readme = "README.md"
+authors = [
+    { name = "louis camara", email = "290180433+tilouc@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "rich>=13.0",
+]
+
+[project.scripts]
+velo = "velo.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.0,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
